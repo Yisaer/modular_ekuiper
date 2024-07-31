@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -110,6 +111,7 @@ func portableHandler(w http.ResponseWriter, r *http.Request) {
 			handleError(w, err, fmt.Sprintf("delete portable plugin %s error", name), logger)
 			return
 		}
+		time.Sleep(time.Second)
 		w.WriteHeader(http.StatusOK)
 		result := fmt.Sprintf("portable plugin %s is deleted", name)
 		w.Write([]byte(result))
@@ -129,6 +131,7 @@ func portableHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		err = portableManager.Delete(name)
+		time.Sleep(time.Second)
 		if err != nil {
 			conf.Log.Errorf("delete portable plugin %s error: %v", name, err)
 		}

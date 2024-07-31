@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lf-edge/ekuiper/internal/conf"
 	"github.com/lf-edge/ekuiper/internal/meta"
@@ -40,6 +41,7 @@ import (
 var manager *Manager
 
 type Manager struct {
+	sync.RWMutex
 	pluginDir     string
 	pluginConfDir string
 	reg           *registry // can be replaced with kv
@@ -77,6 +79,8 @@ func InitManager() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	// wait portable plugin process running
+	time.Sleep(3 * time.Second)
 	plg_db, err := store.GetKV("portablePlugin")
 	if err != nil {
 		return nil, fmt.Errorf("error when opening portablePlugin: %v", err)
@@ -160,8 +164,7 @@ func (m *Manager) doRegister(name string, pi *PluginInfo, isInit bool) error {
 		}
 	}
 	conf.Log.Infof("Installed portable plugin %s successfully", name)
-	runtime.GetPluginInsManager().CreateIns(&pi.PluginMeta)
-	return nil
+	return runtime.GetPluginInsManager().CreateIns(&pi.PluginMeta, isInit)
 }
 
 func (m *Manager) parsePluginJson(name string) (*PluginInfo, error) {
@@ -190,6 +193,12 @@ func (m *Manager) removePluginInstallScript(name string) {
 }
 
 func (m *Manager) Register(p plugin.Plugin) error {
+	m.Lock()
+	defer m.Unlock()
+	return m.register(p)
+}
+
+func (m *Manager) register(p plugin.Plugin) error {
 	name, uri, shellParas := p.GetName(), p.GetFile(), p.GetShellParas()
 	name = strings.Trim(name, " ")
 	if name == "" {
@@ -343,10 +352,14 @@ func (m *Manager) install(name, src string, shellParas []string) (resultErr erro
 }
 
 func (m *Manager) List() []*PluginInfo {
+	m.RLock()
+	defer m.RUnlock()
 	return m.reg.List()
 }
 
 func (m *Manager) GetPluginMeta(pt plugin.PluginType, symbolName string) (*runtime.PluginMeta, bool) {
+	m.RLock()
+	defer m.RUnlock()
 	pname, ok := m.reg.GetSymbol(pt, symbolName)
 	if !ok {
 		return nil, false
@@ -360,6 +373,8 @@ func (m *Manager) GetPluginMeta(pt plugin.PluginType, symbolName string) (*runti
 }
 
 func (m *Manager) GetPluginInfo(pluginName string) (*PluginInfo, bool) {
+	m.RLock()
+	defer m.RUnlock()
 	pinfo, ok := m.reg.Get(pluginName)
 	if !ok {
 		return nil, false
@@ -368,6 +383,12 @@ func (m *Manager) GetPluginInfo(pluginName string) (*PluginInfo, bool) {
 }
 
 func (m *Manager) Delete(name string) error {
+	m.Lock()
+	defer m.Unlock()
+	return m.delete(name)
+}
+
+func (m *Manager) delete(name string) error {
 	pinfo, ok := m.reg.Get(name)
 	if !ok {
 		return fmt.Errorf("portable plugin %s is not found", name)
@@ -406,25 +427,21 @@ func (m *Manager) Delete(name string) error {
 }
 
 func (m *Manager) UninstallAllPlugins() {
+	m.Lock()
+	defer m.Unlock()
 	keys, err := m.plgInstallDb.Keys()
 	if err != nil {
 		return
 	}
 	for _, v := range keys {
-		_ = m.Delete(v)
+		_ = m.delete(v)
 	}
 }
 
 func (m *Manager) GetAllPlugins() map[string]string {
+	m.RLock()
+	defer m.RUnlock()
 	allPlgs, err := m.plgInstallDb.All()
-	if err != nil {
-		return nil
-	}
-	return allPlgs
-}
-
-func (m *Manager) GetAllPluginsStatus() map[string]string {
-	allPlgs, err := m.plgStatusDb.All()
 	if err != nil {
 		return nil
 	}
@@ -437,7 +454,7 @@ func (m *Manager) pluginRegisterForImport(k, v string) error {
 	if err != nil {
 		return err
 	}
-	err = m.Register(sd)
+	err = m.register(sd)
 	if err != nil {
 		conf.Log.Errorf(`install portable plugin %s error: %v`, k, err)
 		return err
@@ -446,6 +463,8 @@ func (m *Manager) pluginRegisterForImport(k, v string) error {
 }
 
 func (m *Manager) PluginImport(plugins map[string]string) map[string]string {
+	m.Lock()
+	defer m.Unlock()
 	errMap := map[string]string{}
 	_ = m.plgStatusDb.Clean()
 	for k, v := range plugins {
@@ -460,6 +479,8 @@ func (m *Manager) PluginImport(plugins map[string]string) map[string]string {
 }
 
 func (m *Manager) PluginPartialImport(plugins map[string]string) map[string]string {
+	m.Lock()
+	defer m.Unlock()
 	errMap := map[string]string{}
 	for k, v := range plugins {
 		var installScript string

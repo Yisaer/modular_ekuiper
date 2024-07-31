@@ -181,12 +181,27 @@ func (p *pluginInsManager) AddPluginIns(name string, ins *PluginIns) {
 }
 
 // CreateIns Run when plugin is created/updated
-func (p *pluginInsManager) CreateIns(pluginMeta *PluginMeta) {
+func (p *pluginInsManager) CreateIns(pluginMeta *PluginMeta, isInit bool) error {
 	p.Lock()
 	defer p.Unlock()
-	if _, ok := p.instances[pluginMeta.Name]; ok {
-		go p.getOrStartProcess(pluginMeta, PortbleConf)
+	if isInit {
+		go func() {
+			_, err := p.getOrStartProcess(pluginMeta, PortbleConf)
+			if err != nil {
+				conf.Log.Errorf("create plugin %s failed: %v", pluginMeta.Name, err)
+			} else {
+				conf.Log.Infof("create plugin %s success", pluginMeta.Name)
+			}
+		}()
+		return nil
 	}
+	_, err := p.getOrStartProcess(pluginMeta, PortbleConf)
+	if err != nil {
+		conf.Log.Errorf("create plugin %s failed: %v", pluginMeta.Name, err)
+	} else {
+		conf.Log.Infof("create plugin %s success", pluginMeta.Name)
+	}
+	return err
 }
 
 // getOrStartProcess Control the plugin process lifecycle.
@@ -211,6 +226,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 	}
 	// ins process has not run yet
 	if ins.process != nil && ins.ctrlChan != nil {
+		conf.Log.Infof("process %s alreayd started", pluginMeta.Name)
 		return ins, nil
 	}
 	// should only happen for first start, then the ctrl channel will keep running
@@ -221,6 +237,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 			return nil, fmt.Errorf("plugin %s can't create new control channel: %s", pluginMeta.Name, err.Error())
 		}
 		ins.ctrlChan = ctrlChan
+		conf.Log.Infof("create process %s ctrl channel successfully", pluginMeta.Name)
 	}
 	defer func() {
 		if e != nil && ins.ctrlChan != nil {
@@ -230,6 +247,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 	// init or restart all need to run the process
 	jsonArg, err := json.Marshal(pconf)
 	if err != nil {
+		conf.Log.Errorf("plugin %s invalid conf: %v", pluginMeta.Name, pconf)
 		return nil, fmt.Errorf("invalid conf: %v", pconf)
 	}
 	var cmd *exec.Cmd
@@ -258,6 +276,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 		return nil
 	})
 	if err != nil {
+		conf.Log.Errorf("failed to start plugin %s: %v", pluginMeta.Name, err)
 		return nil, fmt.Errorf("fail to start plugin %s: %v", pluginMeta.Name, err)
 	}
 	cmd.Stdout = conf.Log.Out
@@ -279,7 +298,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 	go infra.SafeRun(func() error { // just print out error inside
 		err = cmd.Wait()
 		if err != nil {
-			conf.Log.Printf("plugin executable %s stops with error %v", pluginMeta.Executable, err)
+			conf.Log.Errorf("plugin executable %s stops with error %v", pluginMeta.Executable, err)
 		}
 		// must make sure the plugin ins is not cleaned up yet by checking the process identity
 		// clean up for stop unintentionally
@@ -294,25 +313,24 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 		}
 		return nil
 	})
-	conf.Log.Println("waiting handshake")
 	err = ins.ctrlChan.Handshake()
 	if err != nil {
+		conf.Log.Infof("plugin %s handshake successfully", pluginMeta.Name)
 		return nil, fmt.Errorf("plugin %s control handshake error: %v", pluginMeta.Executable, err)
 	}
+	conf.Log.Infof("plugin %s handshake successfully", pluginMeta.Name)
 	ins.process = process
 	p.instances[pluginMeta.Name] = ins
 	conf.Log.Infof("plugin %s start running, process: %v", pluginMeta.Name, process.Pid)
-	// restore symbols by sending commands when restarting plugin
-	conf.Log.Infof("restore plugin %s symbols", pluginMeta.Name)
-	for m, c := range ins.commands {
-		go func(key Meta, jsonArg []byte) {
-			e := ins.sendCmd(jsonArg)
-			if e != nil {
-				conf.Log.Errorf("send command to %v error: %v", key, e)
-			}
-		}(m, c)
+	for key, jsonArg := range ins.commands {
+		err := ins.sendCmd(jsonArg)
+		if err != nil {
+			conf.Log.Errorf("plugin %s send command key %s error:%v", pluginMeta.Name, key, err)
+			return nil, err
+		}
 	}
-
+	// restore symbols by sending commands when restarting plugin
+	conf.Log.Infof("restore plugin %s symbols successfully", pluginMeta.Name)
 	return ins, nil
 }
 
