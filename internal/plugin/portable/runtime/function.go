@@ -41,7 +41,7 @@ func NewPortableFunc(symbolName string, reg *PluginMeta) (_ *PortableFunc, e err
 	// Setup channel and route the data
 	conf.Log.Infof("Start running portable function meta %+v", reg)
 	pm := GetPluginInsManager()
-	ins, err := pm.getOrStartProcess(reg, PortbleConf)
+	ins, err := pm.getOrStartProcess(kctx.Background(), reg, PortbleConf)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +100,8 @@ func (f *PortableFunc) Validate(args []interface{}) error {
 }
 
 func (f *PortableFunc) Exec(args []interface{}, ctx api.FunctionContext) (interface{}, bool) {
+	pm := GetPluginInsManager()
+	pm.RuleAttachIns(ctx.GetRuleId(), f.symbolName)
 	ctx.GetLogger().Debugf("running portable func with args %+v", args)
 	ctxRaw, err := encodeCtx(ctx)
 	if err != nil {

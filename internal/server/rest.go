@@ -37,6 +37,7 @@ import (
 	"github.com/lf-edge/ekuiper/internal/generater"
 	"github.com/lf-edge/ekuiper/internal/meta"
 	"github.com/lf-edge/ekuiper/internal/pkg/httpx"
+	runtime2 "github.com/lf-edge/ekuiper/internal/plugin/portable/runtime"
 	"github.com/lf-edge/ekuiper/internal/processor"
 	"github.com/lf-edge/ekuiper/internal/server/middleware"
 	"github.com/lf-edge/ekuiper/pkg/api"
@@ -492,6 +493,7 @@ func ruleHandler(w http.ResponseWriter, r *http.Request) {
 			handleError(w, err, "Delete rule error", logger)
 			return
 		}
+		runtime2.GetPluginInsManager().BroadcastRuleDetach(name)
 		time.Sleep(time.Second)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(content))

@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/lf-edge/ekuiper/internal/conf"
+	"github.com/lf-edge/ekuiper/internal/topo/context"
 	"github.com/lf-edge/ekuiper/pkg/api"
 	"github.com/lf-edge/ekuiper/pkg/infra"
 )
@@ -157,6 +158,7 @@ func GetPluginInsManager() *pluginInsManager {
 			instances: make(map[string]*PluginIns),
 		}
 	})
+
 	return pm
 }
 
@@ -209,10 +211,27 @@ func (p *pluginInsManager) CreateIns(pluginMeta *PluginMeta) {
 	if ins, ok := p.instances[pluginMeta.Name]; ok {
 		if len(ins.commands) != 0 {
 			conf.Log.Infof("plugin %s run get or start", pluginMeta.Name)
-			go p.getOrStartProcess(pluginMeta, PortbleConf)
+			go p.getOrStartProcess(context.Background(), pluginMeta, PortbleConf)
 		} else {
 			conf.Log.Infof("plugin %s reuse previous instance with %d commands", pluginMeta.Name, len(ins.commands))
 		}
+	}
+}
+
+func (p *pluginInsManager) RuleAttachIns(ruleId, pluginMetaName string) {
+	p.Lock()
+	defer p.Unlock()
+	ins, ok := p.instances[pluginMetaName]
+	if ok {
+		ins.Status.AttachRule(ruleId)
+	}
+}
+
+func (p *pluginInsManager) BroadcastRuleDetach(ruleId string) {
+	p.Lock()
+	defer p.Unlock()
+	for _, ins := range p.instances {
+		ins.Status.DetachRule(ruleId)
 	}
 }
 
@@ -223,7 +242,7 @@ func (p *pluginInsManager) CreateIns(pluginMeta *PluginMeta) {
 // During plugin delete/update, if the commands is not empty, keep the ins for next creation and restore
 // 1. During creation, clean up those resources for any errors in defer immediately after the resource is created.
 // 2. During plugin running, when detecting plugin process exit, clean up those resources for the current ins.
-func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *PortableConfig) (_ *PluginIns, e error) {
+func (p *pluginInsManager) getOrStartProcess(ctx api.StreamContext, pluginMeta *PluginMeta, pconf *PortableConfig) (_ *PluginIns, e error) {
 	p.Lock()
 	defer p.Unlock()
 	var (
@@ -337,7 +356,7 @@ func (p *pluginInsManager) getOrStartProcess(pluginMeta *PluginMeta, pconf *Port
 	ins.process = process
 	p.instances[pluginMeta.Name] = ins
 	conf.Log.Infof("plugin %s start running, process: %v", pluginMeta.Name, process.Pid)
-	ins.Status.StartRunning(ins.process.Pid)
+	ins.Status.StartRunning(ctx.GetRuleId(), ins.process.Pid)
 	// restore symbols by sending commands when restarting plugin
 	conf.Log.Infof("restore plugin %s symbols", pluginMeta.Name)
 	for m, c := range ins.commands {
@@ -393,16 +412,26 @@ const (
 )
 
 type PluginStatus struct {
-	Status        string         `json:"status"`
-	ErrMsg        string         `json:"errMsg"`
-	Pid           int            `json:"pid"`
-	ProcessStatus *ProcessStatus `json:"processStatus"`
+	RelatedRules  map[string]struct{} `json:"rules"`
+	Status        string              `json:"status"`
+	ErrMsg        string              `json:"errMsg"`
+	Pid           int                 `json:"pid"`
+	ProcessStatus *ProcessStatus      `json:"processStatus"`
 }
 
 func NewPluginStatus() *PluginStatus {
 	return &PluginStatus{
-		Status: PluginStatusInit,
+		RelatedRules: map[string]struct{}{},
+		Status:       PluginStatusInit,
 	}
+}
+
+func (s *PluginStatus) DetachRule(rule string) {
+	delete(s.RelatedRules, rule)
+}
+
+func (s *PluginStatus) AttachRule(rule string) {
+	s.RelatedRules[rule] = struct{}{}
 }
 
 func (s *PluginStatus) StatusErr(err error) {
@@ -410,7 +439,8 @@ func (s *PluginStatus) StatusErr(err error) {
 	s.ErrMsg = err.Error()
 }
 
-func (s *PluginStatus) StartRunning(pid int) {
+func (s *PluginStatus) StartRunning(ruleID string, pid int) {
+	s.RelatedRules[ruleID] = struct{}{}
 	s.Status = PluginStatusRunning
 	s.Pid = pid
 	s.ErrMsg = ""
