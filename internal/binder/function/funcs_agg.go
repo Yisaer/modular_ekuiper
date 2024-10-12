@@ -80,7 +80,10 @@ func registerAggFunc() {
 				}
 			}
 			for _, col := range columns {
-				result = append(result, aggData[col])
+				_, ok := aggData[col]
+				if ok {
+					result = append(result, aggData[col])
+				}
 			}
 			return result, true
 		},
